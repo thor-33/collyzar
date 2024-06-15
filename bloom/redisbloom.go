@@ -1,10 +1,12 @@
 package bloom
 
 import (
+	"context"
 	"errors"
-	"github.com/go-redis/redis"
-	"github.com/spaolacci/murmur3"
 	"strconv"
+
+	"github.com/redis/go-redis/v9"
+	"github.com/spaolacci/murmur3"
 )
 
 const (
@@ -30,8 +32,8 @@ var ErrTooLargeOffset = errors.New("too large offset")
 
 type (
 	BitSetProvider interface {
-		check([]uint) (bool, error)
-		set([]uint) error
+		check(context.Context, []uint) (bool, error)
+		set(context.Context, []uint) error
 	}
 
 	BloomFilter struct {
@@ -53,18 +55,18 @@ func New(store *redis.Client, key string, bits uint) *BloomFilter {
 	}
 }
 
-func (f *BloomFilter) Add(data []byte) error {
+func (f *BloomFilter) Add(ctx context.Context, data []byte) error {
 	locations := f.getLocations(data)
-	err := f.bitSet.set(locations)
+	err := f.bitSet.set(ctx, locations)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (f *BloomFilter) Exists(data []byte) (bool, error) {
+func (f *BloomFilter) Exists(ctx context.Context, data []byte) (bool, error) {
 	locations := f.getLocations(data)
-	isSet, err := f.bitSet.check(locations)
+	isSet, err := f.bitSet.check(ctx, locations)
 	if err != nil {
 		return false, err
 	}
@@ -117,13 +119,13 @@ func (r *redisBitSet) buildOffsetArgs(offsets []uint) ([]string, error) {
 	return args, nil
 }
 
-func (r *redisBitSet) check(offsets []uint) (bool, error) {
+func (r *redisBitSet) check(ctx context.Context, offsets []uint) (bool, error) {
 	args, err := r.buildOffsetArgs(offsets)
 	if err != nil {
 		return false, err
 	}
 
-	resp, err := r.store.Eval(testScript, []string{r.key}, args).Result()
+	resp, err := r.store.Eval(ctx, testScript, []string{r.key}, args).Result()
 	if err == redis.Nil {
 		return false, nil
 	} else if err != nil {
@@ -137,22 +139,21 @@ func (r *redisBitSet) check(offsets []uint) (bool, error) {
 	}
 }
 
-func (r *redisBitSet) del() error {
-	_, err := r.store.Del(r.key).Result()
+func (r *redisBitSet) del(ctx context.Context) error {
+	_, err := r.store.Del(ctx, r.key).Result()
 	return err
 }
 
-func (r *redisBitSet) set(offsets []uint) error {
+func (r *redisBitSet) set(ctx context.Context, offsets []uint) error {
 	args, err := r.buildOffsetArgs(offsets)
 	if err != nil {
 		return err
 	}
 
-	_, err = r.store.Eval(setScript, []string{r.key}, args).Result()
+	_, err = r.store.Eval(ctx, setScript, []string{r.key}, args).Result()
 	if err == redis.Nil {
 		return nil
 	} else {
 		return err
 	}
 }
-
